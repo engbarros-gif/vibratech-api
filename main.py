@@ -88,3 +88,4 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
     except Exception as e:
         # Se houver qualquer erro, devolve o detalhe exato para a interface
         raise HTTPException(status_code=500, detail=f"Erro detalhado no servidor: {str(e)}")
+        
