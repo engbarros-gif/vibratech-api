@@ -1,3 +1,6 @@
+# ==========================================
+# BLOCO 1: MÓDULO SINCRONISMO DO SCHEDULE
+# ==========================================
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
@@ -42,3 +45,29 @@ def get_rotas():
     finally:
         cur.close()
         conn.close()
+# ==========================================
+# BLOCO 2: MÓDULO DE IMPORTAÇÃO E PARSER HTML
+# ==========================================
+@app.post("/api/upload-html")
+async def upload_html(file: UploadFile = File(...)):
+    try:
+        # Lê o conteúdo do arquivo HTML enviado pelo usuário
+        contents = await file.read()
+        html_content = contents.decode("utf-8", errors="ignore")
+        
+        # Processa o HTML usando BeautifulSoup para extrair informações estruturadas
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        route_title = "Inspection Route"
+        title_tag = soup.find('title')
+        if title_tag:
+            route_title = title_tag.text.strip()
+            
+        return {
+            "status": "success",
+            "filename": file.filename,
+            "route_detected": route_title,
+            "message": "HTML processado com sucesso pelo BeautifulSoup!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
