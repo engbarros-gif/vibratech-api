@@ -21,6 +21,10 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
+@app.get("/")
+def home():
+    return {"message": "API do VibraTech está online! Acesse /api/rotas para ver os dados do Neon."}
+
 @app.get("/api/health")
 def health_check():
     return {"status": "online", "database": "conectado" if DATABASE_URL else "ausente"}
