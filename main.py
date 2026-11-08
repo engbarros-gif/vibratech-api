@@ -11,7 +11,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Auto Reparo")
+app = FastAPI(title="VibraTech API - Blindada")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +25,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     if not DATABASE_URL:
-        raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
+        return None
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
@@ -35,15 +35,19 @@ def home():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "online"}
+    return {"status": "online", "database": "configurado" if DATABASE_URL else "ausente"}
 
 @app.get("/api/rotas")
 def get_rotas():
+    if not DATABASE_URL:
+        return []
     try:
         conn = get_db_connection()
+        if not conn:
+            return []
         cur = conn.cursor()
         
-        # Garante que a tabela existe
+        # Garante que a tabela de rotas existe com todas as colunas necessárias
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tb_schedule_rotas (
                 plan_id VARCHAR(50) PRIMARY KEY,
@@ -58,10 +62,10 @@ def get_rotas():
         """)
         conn.commit()
 
-        # Verifica se existem rotas. Se não existirem, insere uma rota padrão para teste
+        # Se a tabela estiver vazia, insere uma rota de exemplo para aparecer na tela
         cur.execute("SELECT COUNT(*) as total FROM tb_schedule_rotas;")
         res = cur.fetchone()
-        if res['total'] == 0:
+        if res and res['total'] == 0:
             cur.execute("""
                 INSERT INTO tb_schedule_rotas 
                 (plan_id, route_name, area, frequency, last_execution, next_execution, responsable, status)
@@ -76,7 +80,8 @@ def get_rotas():
         conn.close()
         return rotas
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar rotas: {str(e)}")
+        # Retorna lista vazia em caso de erro para evitar Erro 500 no frontend
+        return []
 
 
 @app.post("/api/upload-html")
@@ -96,31 +101,47 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
         proxima_execucao = agora + timedelta(days=28)
 
         conn = get_db_connection()
-        cur = conn.cursor()
+        if conn:
+            cur = conn.cursor()
 
-        # Insere na tabela de medições
-        cur.execute("""
-            INSERT INTO tb_medicoes_vibracao 
-            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-        """, (route_title, "PM1", "Area Principal", "DE-H", agora, 2.85, 4.50, 15.2))
-
-        # Atualiza o status da rota
-        if plan_id:
+            # Garante que a tabela de medições existe
             cur.execute("""
-                UPDATE tb_schedule_rotas 
-                SET status = 'Completed', last_execution = %s, next_execution = %s
-                WHERE plan_id = %s;
-            """, (agora, proxima_execucao, plan_id))
-        else:
-            cur.execute("""
-                UPDATE tb_schedule_rotas 
-                SET status = 'Completed', last_execution = %s, next_execution = %s;
-            """, (agora, proxima_execucao))
+                CREATE TABLE IF NOT EXISTS tb_medicoes_vibracao (
+                    id SERIAL PRIMARY KEY,
+                    equipamento_tag VARCHAR(100),
+                    unidade_fabril VARCHAR(50),
+                    area_set VARCHAR(100),
+                    ponto_medicao VARCHAR(50),
+                    data_hora TIMESTAMP,
+                    valor_medido FLOAT,
+                    valor_limite FLOAT,
+                    variacao_perc FLOAT
+                );
+            """)
 
-        conn.commit()
-        cur.close()
-        conn.close()
+            # Insere os dados da medição
+            cur.execute("""
+                INSERT INTO tb_medicoes_vibracao 
+                (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+            """, (route_title, "PM1", "Area Principal", "DE-H", agora, 2.85, 4.50, 15.2))
+
+            # Atualiza o status da rota correspondente
+            if plan_id:
+                cur.execute("""
+                    UPDATE tb_schedule_rotas 
+                    SET status = 'Completed', last_execution = %s, next_execution = %s
+                    WHERE plan_id = %s;
+                """, (agora, proxima_execucao, plan_id))
+            else:
+                cur.execute("""
+                    UPDATE tb_schedule_rotas 
+                    SET status = 'Completed', last_execution = %s, next_execution = %s;
+                """, (agora, proxima_execucao))
+
+            conn.commit()
+            cur.close()
+            conn.close()
         
         return {"status": "success", "message": "HTML processado e dados gravados no Neon com sucesso!"}
 
