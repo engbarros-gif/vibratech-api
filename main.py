@@ -4,9 +4,9 @@ import psycopg2
 import psycopg2.extras
 import os
 
-app = FastAPI(title="VibraTech API - Bloco 1 Estável")
+app = FastAPI(title="VibraTech API - Arquitetura Modular")
 
-# Configuração de CORS para permitir requisições do frontend na Vercel
+# Configuração de CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,9 +22,13 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
+
+# ==========================================
+# BLOCO 1: NÚCLEO, SAÚDE E ROTAS DO NEON
+# ==========================================
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech está online!"}
+    return {"message": "API do VibraTech modular está online!"}
 
 @app.get("/api/health")
 def health_check():
@@ -43,3 +47,14 @@ def get_rotas():
     finally:
         cur.close()
         conn.close()
+
+
+# ==========================================
+# INTEGRAÇÃO SEGURA DO BLOCO 2 (PARSER HTML)
+# ==========================================
+try:
+    from parser_skf import router as parser_router
+    app.include_router(parser_router)
+    print("Módulo Parser SKF integrado com sucesso.")
+except Exception as e:
+    print(f"Aviso: O módulo Parser SKF não foi carregado: {e}")
