@@ -11,7 +11,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Estável")
+app = FastAPI(title="VibraTech API - Auto Reparo")
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,7 +42,34 @@ def get_rotas():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # SELECT * sem ORDER BY para evitar erros caso o nome da coluna de ID varie
+        
+        # Garante que a tabela existe
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tb_schedule_rotas (
+                plan_id VARCHAR(50) PRIMARY KEY,
+                route_name VARCHAR(100),
+                area VARCHAR(50),
+                frequency VARCHAR(50),
+                last_execution TIMESTAMP,
+                next_execution TIMESTAMP,
+                responsable VARCHAR(100),
+                status VARCHAR(50)
+            );
+        """)
+        conn.commit()
+
+        # Verifica se existem rotas. Se não existirem, insere uma rota padrão para teste
+        cur.execute("SELECT COUNT(*) as total FROM tb_schedule_rotas;")
+        res = cur.fetchone()
+        if res['total'] == 0:
+            cur.execute("""
+                INSERT INTO tb_schedule_rotas 
+                (plan_id, route_name, area, frequency, last_execution, next_execution, responsable, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+            """, ("1M", "#1PM BASEMENT 1", "PM1", "Monthly", datetime.now(), datetime.now() + timedelta(days=28), "de Barros Marcelo", "Pendente"))
+            conn.commit()
+
+        # Busca todas as rotas
         cur.execute("SELECT * FROM tb_schedule_rotas;")
         rotas = cur.fetchall()
         cur.close()
@@ -78,18 +105,18 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """, (route_title, "PM1", "Area Principal", "DE-H", agora, 2.85, 4.50, 15.2))
 
-        # Atualiza a rota correspondente (tentando atualizar pelo plan_id ou pela primeira linha)
+        # Atualiza o status da rota
         if plan_id:
             cur.execute("""
                 UPDATE tb_schedule_rotas 
-                SET status = 'Completed'
+                SET status = 'Completed', last_execution = %s, next_execution = %s
                 WHERE plan_id = %s;
-            """, (plan_id,))
+            """, (agora, proxima_execucao, plan_id))
         else:
             cur.execute("""
                 UPDATE tb_schedule_rotas 
-                SET status = 'Completed';
-            """)
+                SET status = 'Completed', last_execution = %s, next_execution = %s;
+            """, (agora, proxima_execucao))
 
         conn.commit()
         cur.close()
