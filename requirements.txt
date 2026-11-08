@@ -1,5 +1,4 @@
 fastapi
 uvicorn
-beautifulsoup4
 psycopg2-binary
-pydantic
+beautifulsoup4
