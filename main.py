@@ -1,3 +1,73 @@
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from bs4 import BeautifulSoup
+import psycopg2
+import psycopg2.extras
+import os
+from datetime import datetime, timedelta
+
+app = FastAPI(title="VibraTech API - Neon & FastAPI")
+
+# Configuração de CORS para permitir requisições do frontend na Vercel
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Obter a URL de conexão do Neon PostgreSQL das variáveis de ambiente do Render
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_db_connection():
+    if not DATABASE_URL:
+        raise HTTPException(status_code=500, detail="DATABASE_URL environment variable not configured.")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn
+
+# Modelos Pydantic
+class FalhaRecord(BaseModel):
+    id: str
+    ponto_medicao: str
+    equipamento_tag: str
+    area_set: str
+    validation_type: str
+    tipos_falha: str
+    descricao_falha: str
+    severidade: str
+    recomendacao: str
+    espectros_count: int
+
+@app.get("/api/rotas")
+def get_rotas():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
+        rotas = cur.fetchall()
+        return rotas
+    except Exception as e:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/medicoes")
+def get_medicoes():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_inclusao DESC LIMIT 100;")
+        medicoes = cur.fetchall()
+        return medicoes
+    except Exception as e:
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(...)):
     content = await file.read()
@@ -27,7 +97,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(...)):
                     except ValueError:
                         valor = 0.0
 
-                    # Inserção com nome_rota e data_inclusao preenchidos automaticamente
+                    # Inserção com nome_rota e data_inclusao incluídos
                     cur.execute(
                         """
                         INSERT INTO tb_medicoes_vibracao 
@@ -38,7 +108,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(...)):
                     )
                     inserted_points += 1
 
-        # Atualiza a tabela de cronograma de rotas
+        # Atualiza a tabela de cronograma de rotas no Neon
         cur.execute(
             """
             UPDATE tb_schedule_rotas 
@@ -52,12 +122,44 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(...)):
         
         conn.commit()
         return {
-            "message": f"Relatório da rota '{rota_nome}' processado! {inserted_points} pontos gravados com sucesso."
+            "message": f"Relatório da rota '{rota_nome}' processado! {inserted_points} pontos gravados com sucesso no Neon."
         }
         
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.post("/api/registros-falha")
+def save_registro_falha(record: FalhaRecord):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO tb_registros_falha 
+            (id, ponto_medicao, equipamento_tag, area_set, validation_type, tipos_falha, descricao_falha, severidade, recomendacao, espectros_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                validation_type = EXCLUDED.validation_type,
+                tipos_falha = EXCLUDED.tipos_falha,
+                descricao_falha = EXCLUDED.descricao_falha,
+                severidade = EXCLUDED.severidade,
+                recomendacao = EXCLUDED.recomendacao;
+            """,
+            (
+                record.id, record.ponto_medicao, record.equipamento_tag, record.area_set,
+                record.validation_type, record.tipos_falha, record.descricao_falha,
+                record.severidade, record.recomendacao, record.espectros_count
+            )
+        )
+        conn.commit()
+        return {"status": "success", "message": "Registro de falha salvo com sucesso no Neon!"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cur.close()
         conn.close()
