@@ -3,10 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
 import os
-from bs4 import BeautifulSoup
 import re
 
-app = FastAPI(title="VibraTech API - Blocos 1 e 2")
+# Importação segura do BeautifulSoup para evitar falhas globais na Vercel
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+
+app = FastAPI(title="VibraTech API - Bloco 1 e 2 Protegido")
 
 # Configuração de CORS para permitir requisições do frontend na Vercel
 app.add_middleware(
@@ -30,11 +36,15 @@ def get_db_connection():
 # ==========================================
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech está online! Blocos 1 e 2 ativos."}
+    return {"message": "API do VibraTech está online! Bloco 1 ativo."}
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "online", "database": "conectado" if DATABASE_URL else "ausente"}
+    return {
+        "status": "online", 
+        "database": "conectado" if DATABASE_URL else "ausente",
+        "beautifulsoup": "ativo" if BS4_AVAILABLE else "indisponivel"
+    }
 
 @app.get("/api/rotas")
 def get_rotas():
@@ -56,12 +66,14 @@ def get_rotas():
 # ==========================================
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...)):
+    if not BS4_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Biblioteca BeautifulSoup não está carregada no ambiente.")
     try:
         # Lê o conteúdo do ficheiro HTML enviado pelo utilizador
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
         
-        # Processa o HTML usando BeautifulSoup para extrair informações estruturadas
+        # Processa o HTML usando BeautifulSoup
         soup = BeautifulSoup(html_content, 'html.parser')
         
         route_title = "Inspection Route"
@@ -73,7 +85,7 @@ async def upload_html(file: UploadFile = File(...)):
             "status": "success",
             "filename": file.filename,
             "route_detected": route_title,
-            "message": "HTML processado com sucesso pelo BeautifulSoup!"
+            "message": "HTML processado com sucesso com importação segura!"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
