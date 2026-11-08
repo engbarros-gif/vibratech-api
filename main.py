@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
 import os
+from bs4 import BeautifulSoup
+import re
 
-app = FastAPI(title="VibraTech API - Bloco 1 Conexao")
+app = FastAPI(title="VibraTech API - Blocos 1 e 2")
 
+# Configuração de CORS para permitir requisições do frontend na Vercel
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,9 +24,13 @@ def get_db_connection():
         raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
+
+# ==========================================
+# BLOCO 1: NÚCLEO, SAÚDE E ROTAS DO NEON
+# ==========================================
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech está online! Acesse /api/rotas para ver os dados do Neon."}
+    return {"message": "API do VibraTech está online! Blocos 1 e 2 ativos."}
 
 @app.get("/api/health")
 def health_check():
@@ -42,6 +49,8 @@ def get_rotas():
     finally:
         cur.close()
         conn.close()
+
+
 # ==========================================
 # BLOCO 2: MÓDULO DE IMPORTAÇÃO E PARSER HTML
 # ==========================================
