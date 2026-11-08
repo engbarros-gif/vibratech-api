@@ -4,7 +4,7 @@ import psycopg2
 import psycopg2.extras
 import os
 
-app = FastAPI(title="VibraTech API - Bloco 1 Estável")
+app = FastAPI(title="VibraTech API - Rotas Flexíveis")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +24,7 @@ def get_db_connection():
 
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech está online!"}
+    return {"message": "API do VibraTech online!"}
 
 @app.get("/api/health")
 def health_check():
@@ -35,7 +35,8 @@ def get_rotas():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT plan_id, route_name, area, frequency, last_execution, next_execution, responsable, status FROM tb_schedule_rotas ORDER BY plan_id;")
+        # Usa SELECT * para trazer todas as colunas da tabela de rotas sem risco de erro de nome
+        cur.execute("SELECT * FROM tb_schedule_rotas;")
         rotas = cur.fetchall()
         return rotas
     except Exception as e:
@@ -49,5 +50,5 @@ def get_rotas():
 async def upload_html():
     return {
         "status": "success",
-        "message": "Endpoint de upload base ativo."
+        "message": "Endpoint pronto."
     }
