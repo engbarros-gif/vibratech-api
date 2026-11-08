@@ -1,6 +1,3 @@
-# ==========================================
-# BLOCO 1: MÓDULO SINCRONISMO DO SCHEDULE
-# ==========================================
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
