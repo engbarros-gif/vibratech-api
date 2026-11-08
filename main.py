@@ -11,7 +11,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Debug Exato")
+app = FastAPI(title="VibraTech API - Oficial")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +31,7 @@ def get_db_connection():
 
 @app.get("/")
 def home():
-    return {"message": "API online!"}
+    return {"message": "API do VibraTech online!"}
 
 @app.get("/api/health")
 def health_check():
@@ -42,8 +42,9 @@ def get_rotas():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM tb_schedule_rotas;")
-        return cur.fetchall()
+        cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
+        rotas = cur.fetchall()
+        return rotas
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -53,22 +54,22 @@ def get_rotas():
 
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
         
-        soup = BeautifulSoup(html_content, 'html.parser')
         route_title = "Inspection Route"
-        title_tag = soup.find('title')
-        if title_tag:
-            route_title = title_tag.text.strip()
+        if BS4_AVAILABLE:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            title_tag = soup.find('title')
+            if title_tag:
+                route_title = title_tag.text.strip()
             
         agora = datetime.now()
         proxima_execucao = agora + timedelta(days=28)
 
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
         # Insere na tabela de medições
         cur.execute("""
             INSERT INTO tb_medicoes_vibracao 
@@ -76,7 +77,7 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """, (route_title, "PM1", "Area Principal", "DE-H", agora, 2.85, 4.50, 15.2))
 
-        # Atualiza a rota
+        # Atualiza a rota correspondente
         if plan_id:
             cur.execute("""
                 UPDATE tb_schedule_rotas 
@@ -91,11 +92,11 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
             """, (agora, proxima_execucao))
 
         conn.commit()
-        cur.close()
-        conn.close()
-        
-        return {"status": "success", "message": "Gravado com sucesso!"}
+        return {"status": "success", "message": "HTML processado e dados gravados no Neon com sucesso!"}
 
     except Exception as e:
-        # Devolve o erro exato do Python/Banco diretamente na resposta HTTP 500
-        raise HTTPException(status_code=500, detail=f"ERRO EXATO: {str(e)}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
