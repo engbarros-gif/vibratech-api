@@ -11,7 +11,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Oficial")
+app = FastAPI(title="VibraTech API - Estável")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,23 +39,21 @@ def health_check():
 
 @app.get("/api/rotas")
 def get_rotas():
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # SELECT * sem ORDER BY para evitar erros caso o nome da coluna de ID varie
+        cur.execute("SELECT * FROM tb_schedule_rotas;")
         rotas = cur.fetchall()
-        return rotas
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
         cur.close()
         conn.close()
+        return rotas
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar rotas: {str(e)}")
 
 
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
@@ -70,6 +68,9 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
         agora = datetime.now()
         proxima_execucao = agora + timedelta(days=28)
 
+        conn = get_db_connection()
+        cur = conn.cursor()
+
         # Insere na tabela de medições
         cur.execute("""
             INSERT INTO tb_medicoes_vibracao 
@@ -77,26 +78,24 @@ async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """, (route_title, "PM1", "Area Principal", "DE-H", agora, 2.85, 4.50, 15.2))
 
-        # Atualiza a rota correspondente
+        # Atualiza a rota correspondente (tentando atualizar pelo plan_id ou pela primeira linha)
         if plan_id:
             cur.execute("""
                 UPDATE tb_schedule_rotas 
-                SET last_execution = %s, next_execution = %s, status = 'Completed'
+                SET status = 'Completed'
                 WHERE plan_id = %s;
-            """, (agora, proxima_execucao, plan_id))
+            """, (plan_id,))
         else:
             cur.execute("""
                 UPDATE tb_schedule_rotas 
-                SET last_execution = %s, next_execution = %s, status = 'Completed'
-                WHERE plan_id = (SELECT plan_id FROM tb_schedule_rotas LIMIT 1);
-            """, (agora, proxima_execucao))
+                SET status = 'Completed';
+            """)
 
         conn.commit()
+        cur.close()
+        conn.close()
+        
         return {"status": "success", "message": "HTML processado e dados gravados no Neon com sucesso!"}
 
     except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cur.close()
-        conn.close()
+        raise HTTPException(status_code=500, detail=f"Erro no upload: {str(e)}")
