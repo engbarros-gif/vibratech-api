@@ -6,7 +6,7 @@ import os
 from bs4 import BeautifulSoup
 import re
 
-app = FastAPI(title="VibraTech API - Blocos 1 e 2 Separados")
+app = FastAPI(title="VibraTech API - Blocos 1 e 2")
 
 # Configuração de CORS para permitir requisições do frontend na Vercel
 app.add_middleware(
@@ -52,7 +52,7 @@ def get_rotas():
 
 
 # ==========================================
-# BLOCO 2: MÓDULO DE IMPORTAÇÃO E PARSER HTML (ISOLADO)
+# BLOCO 2: MÓDULO DE IMPORTAÇÃO E PARSER HTML
 # ==========================================
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...)):
@@ -69,12 +69,11 @@ async def upload_html(file: UploadFile = File(...)):
         if title_tag:
             route_title = title_tag.text.strip()
             
-        # Retorna o sucesso do processamento sem tocar na base de dados por enquanto
         return {
             "status": "success",
             "filename": file.filename,
             "route_detected": route_title,
-            "message": "HTML processado com sucesso pelo BeautifulSoup (Bloco 2 isolado)!"
+            "message": "HTML processado com sucesso pelo BeautifulSoup!"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
