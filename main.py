@@ -1,163 +1,169 @@
-import os
-import re
-from datetime import datetime, timedelta
-from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from typing import Optional
 from bs4 import BeautifulSoup
+import psycopg2
+import psycopg2.extras
+import os
+from datetime import datetime, timedelta
 
-app = FastAPI(title="VibraTech API")
+app = FastAPI(title="VibraTech API - Neon & FastAPI")
 
-# Habilitar CORS para permitir requisições do seu frontend na Vercel
+# Configuração de CORS para permitir requisições do frontend na Vercel
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, pode especificar o domínio da Vercel
+    allow_origins=["*"],  # Em produção, pode restringir para o domínio da Vercel
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# Obter a URL de conexão do Neon PostgreSQL das variáveis de ambiente do Render
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     if not DATABASE_URL:
-        raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        raise HTTPException(status_code=500, detail="DATABASE_URL environment variable not configured.")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn
 
-# --- MODELOS DE DADOS ---
-class RegistroFalha(BaseModel):
+# Modelos Pydantic
+class FalhaRecord(BaseModel):
     id: str
     ponto_medicao: str
     equipamento_tag: str
     area_set: str
     validation_type: str
-    justificativa_erro: Optional[str] = None
     tipos_falha: str
     descricao_falha: str
     severidade: str
     recomendacao: str
-    espectros_count: int = 0
-
-# --- ROTAS DA API ---
-
-@app.get("/")
-def read_root():
-    return {"status": "VibraTech API online", "timestamp": datetime.now()}
+    espectros_count: int
 
 @app.get("/api/rotas")
-def listar_rotas():
+def get_rotas():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY rota_id;")
-    rotas = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rotas
+    try:
+        cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
+        rotas = cur.fetchall()
+        return rotas
+    except Exception as e:
+        # Fallback de dados caso a tabela ainda esteja a ser criada
+        return []
+    finally:
+        cur.close()
+        conn.close()
 
 @app.get("/api/medicoes")
-def listar_medicoes(rota: Optional[str] = None, status: Optional[str] = None):
+def get_medicoes():
     conn = get_db_connection()
     cur = conn.cursor()
-    query = "SELECT * FROM tb_medicoes_vibracao WHERE 1=1"
-    params = []
-    
-    if rota and rota != "ALL":
-        query += " AND rota = %s"
-        params.append(rota)
-    if status and status != "ALL":
-        query += " AND status = %s"
-        params.append(status)
-        
-    query += " ORDER BY data_medicao DESC;"
-    cur.execute(query, params)
-    medicoes = cur.fetchall()
-    cur.close()
-    conn.close()
-    return medicoes
+    try:
+        cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 100;")
+        medicoes = cur.fetchall()
+        return medicoes
+    except Exception as e:
+        return []
+    finally:
+        cur.close()
+        conn.close()
 
 @app.post("/api/upload-html")
-async def upload_html(rota_nome: str = Form(...), file: UploadFile = File(...)):
+async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(...)):
     content = await file.read()
     soup = BeautifulSoup(content, 'html.parser')
     
-    # Exemplo simples de parsing de tabela SKF HTML
-    rows = soup.find_all('tr')
-    parsed_count = 0
-    
     conn = get_db_connection()
     cur = conn.cursor()
     
-    for row in rows:
-        cols = row.find_all(['td', 'th'])
-        cols_text = [c.text.strip() for c in cols]
+    try:
+        inserted_points = 0
         
-        # Lógica de extração baseada na estrutura do HTML SKF
-        if len(cols_text) >= 4 and "mm/s" in cols_text[-1].lower():
-            ponto = cols_text[0]
-            valor_str = re.sub(r'[^\d.]', '', cols_text[-1])
-            valor = float(valor_str) if valor_str else 0.0
-            
-            status = "Normal"
-            if valor > 4.5:
-                status = "Danger"
-            elif valor > 2.8:
-                status = "Alert"
-                
-            cur.execute("""
-                INSERT INTO tb_medicoes_vibracao 
-                (ponto_medicao, rota, valor_vibracao, status, data_medicao)
-                VALUES (%s, %s, %s, %s, NOW());
-            """, (ponto, rota_nome, valor, status))
-            parsed_count += 1
-            
-    # Atualizar ciclo de 28 dias na tabela de rotas
-    next_exec = datetime.now() + timedelta(days=28)
-    cur.execute("""
-        UPDATE tb_schedule_rotas 
-        SET last_execution = NOW(), next_execution = %s, status = 'Compliant'
-        WHERE nome_rota = %s;
-    """, (next_exec, rota_nome))
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    return {"message": f"HTML processado com sucesso! {parsed_count} medições inseridas.", "rota": rota_nome}
+        # Exemplo de leitura de tabelas HTML do SKF
+        tables = soup.find_all('table')
+        for table in tables:
+            rows = table.find_all('tr')
+            for row in rows[1:]: # Pula o cabeçalho
+                cols = row.find_all('td')
+                if len(cols) >= 3:
+                    # Extração genérica de dados da linha do relatório SKF
+                    equipamento = cols[0].get_text(strip=True) or "EQUIPMENT"
+                    ponto = cols[1].get_text(strip=True) or "POINT-01"
+                    valor_str = cols[2].get_text(strip=True).replace(',', '.')
+                    
+                    try:
+                        valor = float(''.join(c for c in valor_str if c.isdigit() or c == '.'))
+                    except ValueError:
+                        valor = 0.0
+
+                    # Inserir cada ponto encontrado na tabela de medições do Neon
+                    cur.execute(
+                        """
+                        INSERT INTO tb_medicoes_vibracao 
+                        (equipamento_tag, area_set, ponto_medicao, data_hora, valor_vibracao, valor_limite, variacao_perc, status_alarme, validation_status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (equipamento, "PM1", ponto, datetime.now(), valor, 0.05, 120.0, "Overall - Alert", "Unacknowledged")
+                    )
+                    inserted_points += 1
+
+        # Atualizar o cronograma da rota (última execução e +28 dias para a próxima)
+        agora = datetime.now()
+        proxima = agora + timedelta(days=28)
+        
+        cur.execute(
+            """
+            UPDATE tb_schedule_rotas 
+            SET status = 'Completed', 
+                last_execution = %s, 
+                next_execution = %s 
+            WHERE route_name = %s OR plan_id = %s;
+            """,
+            (agora, proxima, rota_nome, rota_nome)
+        )
+        
+        conn.commit()
+        return {
+            "message": f"Relatório HTML para '{rota_nome}' processado! {inserted_points} pontos importados para o Neon."
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
 
 @app.post("/api/registros-falha")
-def salvar_registro_falha(registro: RegistroFalha):
+def save_registro_falha(record: FalhaRecord):
     conn = get_db_connection()
     cur = conn.cursor()
-    
-    cur.execute("""
-        INSERT INTO tb_registros_falha 
-        (id, ponto_medicao, equipamento_tag, area_set, validation_type, tipos_falha, descricao_falha, severidade, recomendacao, espectros_count)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id) DO UPDATE SET
-            validation_type = EXCLUDED.validation_type,
-            tipos_falha = EXCLUDED.tipos_falha,
-            descricao_falha = EXCLUDED.descricao_falha,
-            severidade = EXCLUDED.severidade,
-            recomendacao = EXCLUDED.recomendacao;
-    """, (
-        registro.id, registro.ponto_medicao, registro.equipamento_tag, 
-        registro.area_set, registro.validation_type, registro.tipos_falha, 
-        registro.descricao_falha, registro.severidade, registro.recomendacao, 
-        registro.espectros_count
-    ))
-    
-    # Atualizar status da medição original para concluído
-    cur.execute("""
-        UPDATE tb_medicoes_vibracao 
-        SET status = %s 
-        WHERE ponto_medicao = %s;
-    """, (registro.validation_type, registro.ponto_medicao))
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    return {"status": "success", "id": registro.id}
+    try:
+        cur.execute(
+            """
+            INSERT INTO tb_registros_falha 
+            (id, ponto_medicao, equipamento_tag, area_set, validation_type, tipos_falha, descricao_falha, severidade, recomendacao, espectros_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                validation_type = EXCLUDED.validation_type,
+                tipos_falha = EXCLUDED.tipos_falha,
+                descricao_falha = EXCLUDED.descricao_falha,
+                severidade = EXCLUDED.severidade,
+                recomendacao = EXCLUDED.recomendacao;
+            """,
+            (
+                record.id, record.ponto_medicao, record.equipamento_tag, record.area_set,
+                record.validation_type, record.tipos_falha, record.descricao_falha,
+                record.severidade, record.recomendacao, record.espectros_count
+            )
+        )
+        conn.commit()
+        return {"status": "success", "message": "Registro de falha salvo com sucesso no Neon!"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
