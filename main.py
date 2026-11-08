@@ -1,14 +1,14 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
 import os
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 import re
 
-app = FastAPI(title="VibraTech API - Blocos 1, 2 e 3")
+app = FastAPI(title="VibraTech API - Blocos 1 e 2 Separados")
 
+# Configuração de CORS para permitir requisições do frontend na Vercel
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,7 +30,7 @@ def get_db_connection():
 # ==========================================
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech está online! Sistema modular ativo."}
+    return {"message": "API do VibraTech está online! Blocos 1 e 2 ativos."}
 
 @app.get("/api/health")
 def health_check():
@@ -52,63 +52,29 @@ def get_rotas():
 
 
 # ==========================================
-# BLOCO 2 & 3: PARSER HTML E PERSISTÊNCIA NO NEON
+# BLOCO 2: MÓDULO DE IMPORTAÇÃO E PARSER HTML (ISOLADO)
 # ==========================================
 @app.post("/api/upload-html")
-async def upload_html(file: UploadFile = File(...), plan_id: str = Form(None)):
-    conn = get_db_connection()
-    cur = conn.cursor()
+async def upload_html(file: UploadFile = File(...)):
     try:
-        # Lê o conteúdo do ficheiro HTML enviado
+        # Lê o conteúdo do ficheiro HTML enviado pelo utilizador
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
         
-        # Processa o HTML usando BeautifulSoup
+        # Processa o HTML usando BeautifulSoup para extrair informações estruturadas
         soup = BeautifulSoup(html_content, 'html.parser')
         
         route_title = "Inspection Route"
         title_tag = soup.find('title')
         if title_tag:
             route_title = title_tag.text.strip()
-
-        # Exemplo de gravação de registo de teste/extraído nas medições de vibração
-        # (Aqui refinaremos a leitura das tags exatas do relatório SKF)
-        agora = datetime.now()
-        proxima_execucao = agora + timedelta(days=28)
-
-        # Insere um registo de exemplo na tabela tb_medicoes_vibracao para validar a persistência
-        cur.execute("""
-            INSERT INTO tb_medicoes_vibracao 
-            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-        """, ("MOTOR-01", "PM1", route_title, "DE-H", agora, 2.5, 4.5, 12.5))
-
-        # Atualiza a tabela de rotas marcando como Completed e recalcule a próxima execução (+28 dias)
-        if plan_id:
-            cur.execute("""
-                UPDATE tb_schedule_rotas 
-                SET last_execution = %s, next_execution = %s, status = 'Completed'
-                WHERE plan_id = %s;
-            """, (agora, proxima_execucao, plan_id))
-        else:
-            # Caso o plan_id venha vazio, atualiza a primeira rota pendente para teste
-            cur.execute("""
-                UPDATE tb_schedule_rotas 
-                SET last_execution = %s, next_execution = %s, status = 'Completed'
-                WHERE plan_id = (SELECT plan_id FROM tb_schedule_rotas LIMIT 1);
-            """, (agora, proxima_execucao))
-
-        conn.commit()
             
+        # Retorna o sucesso do processamento sem tocar na base de dados por enquanto
         return {
             "status": "success",
             "filename": file.filename,
             "route_detected": route_title,
-            "message": "HTML processado e dados gravados com sucesso no Neon!"
+            "message": "HTML processado com sucesso pelo BeautifulSoup (Bloco 2 isolado)!"
         }
     except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao persistir dados: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
+        raise HTTPException(status_code=500, detail=f"Erro ao processar HTML: {str(e)}")
