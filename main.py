@@ -1,7 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="VibraTech API - Completa Mock")
+app = FastAPI(title="VibraTech API - Compatibilidade Total")
 
 app.add_middleware(
     CORSMiddleware,
@@ -11,16 +11,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-def home():
-    return {"message": "API online!"}
-
-@app.get("/api/health")
-def health_check():
-    return {"status": "online"}
-
-@app.get("/api/rotas")
-def get_rotas():
+def dados_rotas():
     return [
         {
             "plan_id": "1M",
@@ -54,11 +45,27 @@ def get_rotas():
         }
     ]
 
+@app.get("/")
+def home():
+    return {"message": "API online!"}
+
+@app.get("/health")
+@app.get("/api/health")
+def health_check():
+    return {"status": "online"}
+
+# Rotas sem e com o prefixo /api para garantir compatibilidade total
+@app.get("/rotas")
+@app.get("/api/rotas")
+def get_rotas():
+    return dados_rotas()
+
+@app.get("/medicoes")
 @app.get("/api/medicoes")
 def get_medicoes():
-    # Retorna histórico vazio ou dados simulados para evitar erro 500
     return []
 
+@app.post("/upload-html")
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None)):
     return {
