@@ -3,17 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime, timedelta
 
-# Instancia o objeto app obrigatoriamente no topo para a Vercel detetar
-app = FastAPI(title="VibraTech API - Oficial")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 try:
     import psycopg2
     import psycopg2.extras
@@ -28,16 +17,29 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
+app = FastAPI(title="VibraTech API - Blindada")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     if not DATABASE_URL or not DB_AVAILABLE:
         return None
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    except Exception:
+        return None
 
 @app.get("/")
 def home():
-    return {"message": "API online!"}
+    return {"message": "API online e blindada!"}
 
 @app.get("/health")
 @app.get("/api/health")
@@ -52,7 +54,10 @@ def get_rotas():
         "last_execution": None, "next_execution": None, "responsable": "Sistema", "status": "Erro"
     }]
     conn = get_db_connection()
-    if not conn: return fallback_route
+    if not conn: 
+        return fallback_route
+    
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
@@ -63,22 +68,33 @@ def get_rotas():
             
         rotas_formatadas = []
         for r in rotas:
-            rotas_formatadas.append({
-                "plan_id": r.get("plan_id", ""),
-                "route_name": r.get("route_name", ""),
-                "area": r.get("area", ""),
-                "frequency": r.get("frequency", ""),
-                "last_execution": r.get("last_execution").isoformat() if r.get("last_execution") else "",
-                "next_execution": r.get("next_execution").isoformat() if r.get("next_execution") else "",
-                "responsable": r.get("responsable", ""),
-                "status": r.get("status", "")
-            })
-        return rotas_formatadas
+            try:
+                last_exec = r.get("last_execution")
+                next_exec = r.get("next_execution")
+                
+                rotas_formatadas.append({
+                    "plan_id": str(r.get("plan_id", "")),
+                    "route_name": str(r.get("route_name", "")),
+                    "area": str(r.get("area", "")),
+                    "frequency": str(r.get("frequency", "")),
+                    "last_execution": last_exec.isoformat() if last_exec else "",
+                    "next_execution": next_exec.isoformat() if next_exec else "",
+                    "responsable": str(r.get("responsable", "")),
+                    "status": str(r.get("status", ""))
+                })
+            except Exception:
+                continue
+                
+        return rotas_formatadas if rotas_formatadas else fallback_route
     except Exception: 
         return fallback_route
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            try: cur.close()
+            except Exception: pass
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 @app.get("/medicoes")
 @app.get("/api/medicoes")
@@ -87,32 +103,42 @@ def get_medicoes():
     if not conn: 
         return []
     
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 100;")
         medicoes_cruas = cur.fetchall()
         
         medicoes_formatadas = []
-        for m in medicoes_cruas:
-            medicoes_formatadas.append({
-                "id": m.get("id", len(medicoes_formatadas) + 1),
-                "equipamento_tag": m.get("equipamento_tag", ""),
-                "ponto_medicao": m.get("ponto_medicao", ""),
-                "data_hora": m.get("data_hora").isoformat() if m.get("data_hora") else "",
-                "valor_medido": m.get("valor_medido"),
-                "valor_limite": m.get("valor_limite"),
-                "variacao_perc": m.get("variacao_perc"),
-                "unidade": m.get("unidade", ""),
-                "status_alarme": m.get("status_alarme", "---"),
-                "nome_rota": m.get("nome_rota", ""),
-                "status": "Unacknowledged"
-            })
+        for idx, m in enumerate(medicoes_cruas):
+            try:
+                dh = m.get("data_hora")
+                medicoes_formatadas.append({
+                    "id": m.get("id", idx + 1),
+                    "equipamento_tag": str(m.get("equipamento_tag", "")),
+                    "ponto_medicao": str(m.get("ponto_medicao", "")),
+                    "data_hora": dh.isoformat() if dh else "",
+                    "valor_medido": float(m.get("valor_medido")) if m.get("valor_medido") is not None else None,
+                    "valor_limite": float(m.get("valor_limite")) if m.get("valor_limite") is not None else None,
+                    "variacao_perc": float(m.get("variacao_perc")) if m.get("variacao_perc") is not None else None,
+                    "unidade": str(m.get("unidade", "")),
+                    "status_alarme": str(m.get("status_alarme", "---")),
+                    "nome_rota": str(m.get("nome_rota", "")),
+                    "status": "Unacknowledged"
+                })
+            except Exception:
+                continue
+                
         return medicoes_formatadas
     except Exception: 
         return []
     finally:
-        cur.close()
-        conn.close()
+        if cur:
+            try: cur.close()
+            except Exception: pass
+        if conn:
+            try: conn.close()
+            except Exception: pass
 
 @app.post("/upload-html")
 @app.post("/api/upload-html")
@@ -124,6 +150,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
     if not conn:
         return {"status": "error", "message": "Banco de dados indisponível."}
 
+    cur = None
     try:
         cur = conn.cursor()
         contents = await file.read()
@@ -141,52 +168,55 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
 
         rows = table.find_all("tr")
         for row in rows:
-            cols = [ele.get_text(strip=True) for ele in row.find_all(["td", "th"])]
-            cols_clean = [c for c in cols if c != ""]
-            if len(cols_clean) < 3 or "Machine Description" in cols_clean[0] or "POINT name" in str(cols_clean):
+            try:
+                cols = [ele.get_text(strip=True) for ele in row.find_all(["td", "th"])]
+                cols_clean = [c for c in cols if c != ""]
+                if len(cols_clean) < 3 or "Machine Description" in cols_clean[0] or "POINT name" in str(cols_clean):
+                    continue
+
+                if cols_clean[0] != "---":
+                    current_machine = cols_clean[0]
+                    current_unit = cols_clean[1] if len(cols_clean) > 1 else ""
+                    current_area = cols_clean[2] if len(cols_clean) > 2 else ""
+                    current_point = cols_clean[3] if len(cols_clean) > 3 else ""
+
+                if len(cols_clean) > 3 and cols_clean[3] != "---":
+                    current_point = cols_clean[3]
+
+                dh_raw = cols_clean[4] if len(cols_clean) > 4 else None
+                if dh_raw and dh_raw != "---":
+                    dt_parsed = pd.to_datetime(dh_raw, errors="coerce")
+                    if pd.notna(dt_parsed): current_datetime = dt_parsed
+
+                vm_raw = cols_clean[5] if len(cols_clean) > 5 else None
+                vl_raw = cols_clean[6] if len(cols_clean) > 6 else None
+                var_raw = cols_clean[7] if len(cols_clean) > 7 else None
+                unidade = cols_clean[8] if len(cols_clean) > 8 else ""
+                status_alarme = cols_clean[-1] if len(cols_clean) > 0 else "---"
+
+                valor_medido = pd.to_numeric(vm_raw, errors="coerce")
+                valor_limite = pd.to_numeric(vl_raw, errors="coerce")
+                variacao_perc = pd.to_numeric(var_raw, errors="coerce")
+
+                if pd.notna(variacao_perc) and variacao_perc > 200.0:
+                    if status_alarme == "---" or not status_alarme:
+                        status_alarme = "Alert: High Deviation (>200%)"
+
+                data.append({
+                    "equipamento_tag": current_machine,
+                    "unidade_fabril": current_unit,
+                    "area_set": current_area,
+                    "ponto_medicao": current_point,
+                    "data_hora": current_datetime,
+                    "valor_medido": float(valor_medido) if pd.notna(valor_medido) else None,
+                    "valor_limite": float(valor_limite) if pd.notna(valor_limite) else None,
+                    "variacao_perc": float(variacao_perc) if pd.notna(variacao_perc) else None,
+                    "unidade": unidade,
+                    "status_alarme": status_alarme,
+                    "nome_rota": route_title
+                })
+            except Exception:
                 continue
-
-            if cols_clean[0] != "---":
-                current_machine = cols_clean[0]
-                current_unit = cols_clean[1] if len(cols_clean) > 1 else ""
-                current_area = cols_clean[2] if len(cols_clean) > 2 else ""
-                current_point = cols_clean[3] if len(cols_clean) > 3 else ""
-
-            if len(cols_clean) > 3 and cols_clean[3] != "---":
-                current_point = cols_clean[3]
-
-            dh_raw = cols_clean[4] if len(cols_clean) > 4 else None
-            if dh_raw and dh_raw != "---":
-                dt_parsed = pd.to_datetime(dh_raw, errors="coerce")
-                if pd.notna(dt_parsed): current_datetime = dt_parsed
-
-            vm_raw = cols_clean[5] if len(cols_clean) > 5 else None
-            vl_raw = cols_clean[6] if len(cols_clean) > 6 else None
-            var_raw = cols_clean[7] if len(cols_clean) > 7 else None
-            unidade = cols_clean[8] if len(cols_clean) > 8 else ""
-            status_alarme = cols_clean[-1] if len(cols_clean) > 0 else "---"
-
-            valor_medido = pd.to_numeric(vm_raw, errors="coerce")
-            valor_limite = pd.to_numeric(vl_raw, errors="coerce")
-            variacao_perc = pd.to_numeric(var_raw, errors="coerce")
-
-            if pd.notna(variacao_perc) and variacao_perc > 200.0:
-                if status_alarme == "---" or not status_alarme:
-                    status_alarme = "Alert: High Deviation (>200%)"
-
-            data.append({
-                "equipamento_tag": current_machine,
-                "unidade_fabril": current_unit,
-                "area_set": current_area,
-                "ponto_medicao": current_point,
-                "data_hora": current_datetime,
-                "valor_medido": float(valor_medido) if pd.notna(valor_medido) else None,
-                "valor_limite": float(valor_limite) if pd.notna(valor_limite) else None,
-                "variacao_perc": float(variacao_perc) if pd.notna(variacao_perc) else None,
-                "unidade": unidade,
-                "status_alarme": status_alarme,
-                "nome_rota": route_title
-            })
 
         if not data:
             return {"status": "error", "message": "Nenhum dado válido extraído."}
@@ -217,15 +247,16 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                 row['unidade'], row['status_alarme'], row['nome_rota']
             ))
 
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO tb_medicoes_vibracao 
-            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
-            VALUES %s
-            """,
-            records_to_insert
-        )
+        if records_to_insert:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO tb_medicoes_vibracao 
+                (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
+                VALUES %s
+                """,
+                records_to_insert
+            )
 
         agora = datetime.now()
         cur.execute("""
@@ -238,9 +269,14 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
         return {"status": "success", "filename": file.filename, "message": f"{len(records_to_insert)} medições gravadas com sucesso!"}
 
     except Exception as e:
-        conn.rollback()
+        if conn:
+            try: conn.rollback()
+            except Exception: pass
         return {"status": "error", "message": f"Erro no processamento: {str(e)}"}
     finally:
-        cur.close()
-        conn.close()
-# Atualização limpa
+        if cur:
+            try: cur.close()
+            except Exception: pass
+        if conn:
+            try: conn.close()
+            except Exception: pass
