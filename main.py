@@ -1,8 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
 
-app = FastAPI(title="VibraTech API - Ultra Estável")
+app = FastAPI(title="VibraTech API - Baseline")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,7 +13,7 @@ app.add_middleware(
 
 @app.get("/")
 def home():
-    return {"message": "API do VibraTech online!"}
+    return {"message": "API online e estavel!"}
 
 @app.get("/health")
 @app.get("/api/health")
@@ -34,26 +33,6 @@ def get_rotas():
             "next_execution": "2026-12-13 01:00:00",
             "responsable": "de Barros Marcelo",
             "status": "Pendente"
-        },
-        {
-            "plan_id": "2M",
-            "route_name": "#1PM BASEMENT 2",
-            "area": "PM1",
-            "frequency": "Monthly",
-            "last_execution": "2026-10-26 00:00:00",
-            "next_execution": "2026-11-16 01:00:00",
-            "responsable": "de Barros Marcelo",
-            "status": "Pendente"
-        },
-        {
-            "plan_id": "3M",
-            "route_name": "#1PM COATERS A",
-            "area": "PM1",
-            "frequency": "Monthly",
-            "last_execution": "2026-10-14 00:00:00",
-            "next_execution": "2027-01-03 01:00:00",
-            "responsable": "de Barros Marcelo",
-            "status": "Pendente"
         }
     ]
 
@@ -67,6 +46,5 @@ def get_medicoes():
 async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None)):
     return {
         "status": "success",
-        "filename": file.filename,
-        "message": "Ficheiro HTML processado com sucesso!"
+        "message": "Upload simulado funcionando!"
     }
