@@ -3,6 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime, timedelta
 
+# Instancia o objeto app obrigatoriamente no topo
+app = FastAPI(title="VibraTech API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 try:
     import psycopg2
     import psycopg2.extras
