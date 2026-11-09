@@ -17,7 +17,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Parse SKF Real")
+app = FastAPI(title="VibraTech API - Completa")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,8 +56,26 @@ def get_rotas():
         cur = conn.cursor()
         cur.execute("SELECT * FROM tb_schedule_rotas ORDER BY plan_id;")
         rotas = cur.fetchall()
-        return rotas if rotas else fallback_route
-    except Exception: return fallback_route
+        
+        if not rotas:
+            return fallback_route
+            
+        rotas_formatadas = []
+        for r in rotas:
+            rotas_formatadas.append({
+                "plan_id": r.get("plan_id", ""),
+                "route_name": r.get("route_name", ""),
+                "area": r.get("area", ""),
+                "frequency": r.get("frequency", ""),
+                "last_execution": r.get("last_execution").isoformat() if r.get("last_execution") else "",
+                "next_execution": r.get("next_execution").isoformat() if r.get("next_execution") else "",
+                "responsable": r.get("responsable", ""),
+                "status": r.get("status", "")
+            })
+        return rotas_formatadas
+    except Exception as e: 
+        print(f"Erro rotas: {e}")
+        return fallback_route
     finally:
         cur.close()
         conn.close()
@@ -66,12 +84,33 @@ def get_rotas():
 @app.get("/api/medicoes")
 def get_medicoes():
     conn = get_db_connection()
-    if not conn: return []
+    if not conn: 
+        return []
+    
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 100;")
-        return cur.fetchall()
-    except Exception: return []
+        medicoes_cruas = cur.fetchall()
+        
+        medicoes_formatadas = []
+        for m in medicoes_cruas:
+            medicoes_formatadas.append({
+                "id": m.get("id", len(medicoes_formatadas) + 1),
+                "equipamento_tag": m.get("equipamento_tag", ""),
+                "ponto_medicao": m.get("ponto_medicao", ""),
+                "data_hora": m.get("data_hora").isoformat() if m.get("data_hora") else "",
+                "valor_medido": m.get("valor_medido"),
+                "valor_limite": m.get("valor_limite"),
+                "variacao_perc": m.get("variacao_perc"),
+                "unidade": m.get("unidade", ""),
+                "status_alarme": m.get("status_alarme", "---"),
+                "nome_rota": m.get("nome_rota", ""),
+                "status": "Unacknowledged"
+            })
+        return medicoes_formatadas
+    except Exception as e:
+        print(f"Erro medições: {e}")
+        return []
     finally:
         cur.close()
         conn.close()
@@ -80,7 +119,7 @@ def get_medicoes():
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None)):
     if not BS4_AVAILABLE:
-        return {"status": "error", "message": "Bibliotecas de parsing (BS4/Pandas) não estão disponíveis."}
+        return {"status": "error", "message": "Bibliotecas de parsing não disponíveis."}
     
     conn = get_db_connection()
     if not conn:
@@ -88,17 +127,14 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
 
     try:
         cur = conn.cursor()
-        
-        # 1. Ler o HTML
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
         soup = BeautifulSoup(html_content, "lxml")
         
         table = soup.find("table")
         if not table:
-            return {"status": "error", "message": "Nenhuma tabela encontrada no ficheiro HTML."}
+            return {"status": "error", "message": "Nenhuma tabela encontrada no HTML."}
 
-        # 2. Parse da Tabela (A sua lógica do Colab)
         data = []
         current_machine, current_unit, current_area, current_point = "", "", "", ""
         current_datetime = None
@@ -139,7 +175,6 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                 if status_alarme == "---" or not status_alarme:
                     status_alarme = "Alert: High Deviation (>200%)"
 
-            # Substituir NaNs por None para o banco de dados aceitar
             data.append({
                 "equipamento_tag": current_machine,
                 "unidade_fabril": current_unit,
@@ -155,9 +190,8 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
             })
 
         if not data:
-            return {"status": "error", "message": "Nenhum dado válido extraído do HTML."}
+            return {"status": "error", "message": "Nenhum dado válido extraído."}
 
-        # 3. Consolidação com Pandas (Agrupar alarmes)
         df_raw = pd.DataFrame(data)
 
         def agrupar_alarmes(group):
@@ -170,45 +204,4 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
             linha_base["status_alarme"] = "\n".join(alarmes_validos) if alarmes_validos else "---"
             return linha_base
 
-        df = (df_raw.groupby(["equipamento_tag", "ponto_medicao", "data_hora"], as_index=False, group_keys=False)
-              .apply(agrupar_alarmes)
-              .reset_index(drop=True))
-
-        # 4. Inserção no Neon (Substitui to_sql por executemany)
-        records_to_insert = []
-        for _, row in df.iterrows():
-            if pd.isna(row['data_hora']): continue  # Ignora linhas sem data válida
-            records_to_insert.append((
-                row['equipamento_tag'], row['unidade_fabril'], row['area_set'], row['ponto_medicao'], 
-                row['data_hora'].to_pydatetime() if pd.notna(row['data_hora']) else None,
-                row['valor_medido'], row['valor_limite'], row['variacao_perc'], 
-                row['unidade'], row['status_alarme'], row['nome_rota']
-            ))
-
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO tb_medicoes_vibracao 
-            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
-            VALUES %s
-            """,
-            records_to_insert
-        )
-
-        # Atualiza a rota
-        agora = datetime.now()
-        cur.execute("""
-            UPDATE tb_schedule_rotas 
-            SET status = 'Completed', last_execution = %s, next_execution = %s
-            WHERE route_name = %s;
-        """, (agora, agora + timedelta(days=28), rota_nome))
-
-        conn.commit()
-        return {"status": "success", "filename": file.filename, "message": f"{len(records_to_insert)} medições gravadas com sucesso no Neon!"}
-
-    except Exception as e:
-        conn.rollback()
-        return {"status": "error", "message": f"Erro no processamento do HTML: {str(e)}"}
-    finally:
-        cur.close()
-        conn.close()
+        df = (df_raw.groupby(["equipamento_tag", "p
