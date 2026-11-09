@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import math
 from datetime import datetime, timedelta
 
 try:
@@ -17,7 +18,7 @@ try:
 except ImportError:
     BS4_AVAILABLE = False
 
-app = FastAPI(title="VibraTech API - Blindada")
+app = FastAPI(title="VibraTech API - Blindada contra NaN")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,9 +38,21 @@ def get_db_connection():
     except Exception:
         return None
 
+# Escudo para converter NaN ou Infinity em Null (None) para não rebentar o JSON
+def safe_float(val):
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
+
 @app.get("/")
 def home():
-    return {"message": "API online e blindada!"}
+    return {"message": "API online e blindada contra NaN!"}
 
 @app.get("/health")
 @app.get("/api/health")
@@ -118,9 +131,10 @@ def get_medicoes():
                     "equipamento_tag": str(m.get("equipamento_tag", "")),
                     "ponto_medicao": str(m.get("ponto_medicao", "")),
                     "data_hora": dh.isoformat() if dh else "",
-                    "valor_medido": float(m.get("valor_medido")) if m.get("valor_medido") is not None else None,
-                    "valor_limite": float(m.get("valor_limite")) if m.get("valor_limite") is not None else None,
-                    "variacao_perc": float(m.get("variacao_perc")) if m.get("variacao_perc") is not None else None,
+                    # Aplicação do escudo safe_float nos valores numéricos!
+                    "valor_medido": safe_float(m.get("valor_medido")),
+                    "valor_limite": safe_float(m.get("valor_limite")),
+                    "variacao_perc": safe_float(m.get("variacao_perc")),
                     "unidade": str(m.get("unidade", "")),
                     "status_alarme": str(m.get("status_alarme", "---")),
                     "nome_rota": str(m.get("nome_rota", "")),
