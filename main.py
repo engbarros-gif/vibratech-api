@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime, timedelta
 
-# Instancia o objeto app obrigatoriamente no topo
-app = FastAPI(title="VibraTech API")
+# Instancia o objeto app obrigatoriamente no topo para a Vercel detetar
+app = FastAPI(title="VibraTech API - Oficial")
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,6 +13,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 try:
     import psycopg2
     import psycopg2.extras
@@ -26,16 +27,6 @@ try:
     BS4_AVAILABLE = True
 except ImportError:
     BS4_AVAILABLE = False
-
-app = FastAPI(title="VibraTech API - Completa")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -83,8 +74,7 @@ def get_rotas():
                 "status": r.get("status", "")
             })
         return rotas_formatadas
-    except Exception as e: 
-        print(f"Erro rotas: {e}")
+    except Exception: 
         return fallback_route
     finally:
         cur.close()
@@ -118,8 +108,7 @@ def get_medicoes():
                 "status": "Unacknowledged"
             })
         return medicoes_formatadas
-    except Exception as e:
-        print(f"Erro medições: {e}")
+    except Exception: 
         return []
     finally:
         cur.close()
@@ -214,4 +203,43 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
             linha_base["status_alarme"] = "\n".join(alarmes_validos) if alarmes_validos else "---"
             return linha_base
 
-        df = (df_raw.groupby(["equipamento_tag", "p
+        df = (df_raw.groupby(["equipamento_tag", "ponto_medicao", "data_hora"], as_index=False, group_keys=False)
+              .apply(agrupar_alarmes)
+              .reset_index(drop=True))
+
+        records_to_insert = []
+        for _, row in df.iterrows():
+            if pd.isna(row['data_hora']): continue
+            records_to_insert.append((
+                row['equipamento_tag'], row['unidade_fabril'], row['area_set'], row['ponto_medicao'], 
+                row['data_hora'].to_pydatetime() if pd.notna(row['data_hora']) else None,
+                row['valor_medido'], row['valor_limite'], row['variacao_perc'], 
+                row['unidade'], row['status_alarme'], row['nome_rota']
+            ))
+
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO tb_medicoes_vibracao 
+            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
+            VALUES %s
+            """,
+            records_to_insert
+        )
+
+        agora = datetime.now()
+        cur.execute("""
+            UPDATE tb_schedule_rotas 
+            SET status = 'Completed', last_execution = %s, next_execution = %s
+            WHERE route_name = %s;
+        """, (agora, agora + timedelta(days=28), rota_nome))
+
+        conn.commit()
+        return {"status": "success", "filename": file.filename, "message": f"{len(records_to_insert)} medições gravadas com sucesso!"}
+
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": f"Erro no processamento: {str(e)}"}
+    finally:
+        cur.close()
+        conn.close()
