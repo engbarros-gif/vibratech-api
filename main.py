@@ -60,6 +60,9 @@ class RegistroFalha(BaseModel):
     validation_type: Optional[str] = ""
     tipos_falha: Optional[str] = ""
     descricao_falha: Optional[str] = ""
+    severidade: Optional[str] = "CRITICAL"
+    recomendacao: Optional[str] = ""
+    espectros_count: Optional[int] = 0
 
 @app.get("/")
 def home():
@@ -87,7 +90,6 @@ def get_rotas():
         cur = conn.cursor()
         
         # 1. ATUALIZAÇÃO AUTOMÁTICA DE STATUS (LAZY UPDATE)
-        # Se a rota estiver "Completed" mas faltar 7 dias (ou menos) para o vencimento, volta para "Pendente"
         cur.execute("""
             UPDATE tb_schedule_rotas 
             SET status = 'Pendente' 
@@ -145,13 +147,14 @@ def get_medicoes():
     cur = None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 100;")
+        cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 200;")
         medicoes_cruas = cur.fetchall()
         
         medicoes_formatadas = []
         for idx, m in enumerate(medicoes_cruas):
             try:
                 dh = m.get("data_hora")
+                status_an = m.get("status_analise", "Pendente")
                 medicoes_formatadas.append({
                     "id": m.get("id", idx + 1),
                     "equipamento_tag": str(m.get("equipamento_tag", "")),
@@ -163,7 +166,7 @@ def get_medicoes():
                     "unidade": str(m.get("unidade", "")),
                     "status_alarme": str(m.get("status_alarme", "---")),
                     "nome_rota": str(m.get("nome_rota", "")),
-                    "status": "Unacknowledged"
+                    "validation_status": "Completed" if status_an == 'Analisado' else "Unacknowledged"
                 })
             except Exception:
                 continue
@@ -222,15 +225,22 @@ def save_falha(falha: RegistroFalha):
         if exists:
             cur.execute("""
                 UPDATE tb_registros_falha 
-                SET validation_type=%s, tipos_falha=%s, descricao_falha=%s 
+                SET validation_type=%s, tipos_falha=%s, descricao_falha=%s, severidade=%s, recomendacao=%s, espectros_count=%s
                 WHERE id=%s
-            """, (falha.validation_type, falha.tipos_falha, falha.descricao_falha, falha.id))
+            """, (falha.validation_type, falha.tipos_falha, falha.descricao_falha, falha.severidade, falha.recomendacao, falha.espectros_count, falha.id))
         else:
             cur.execute("""
                 INSERT INTO tb_registros_falha 
-                (id, ponto_medicao, equipamento_tag, area_set, data_registro, validation_type, tipos_falha, descricao_falha)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (falha.id, falha.ponto_medicao, falha.equipamento_tag, falha.area_set, agora, falha.validation_type, falha.tipos_falha, falha.descricao_falha))
+                (id, ponto_medicao, equipamento_tag, area_set, data_registro, validation_type, tipos_falha, descricao_falha, severidade, recomendacao, espectros_count)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (falha.id, falha.ponto_medicao, falha.equipamento_tag, falha.area_set, agora, falha.validation_type, falha.tipos_falha, falha.descricao_falha, falha.severidade, falha.recomendacao, falha.espectros_count))
+        
+        # ATUALIZAÇÃO AUTOMÁTICA DO STATUS: Marca as medições pendentes deste equipamento como 'Analisado'
+        cur.execute("""
+            UPDATE tb_medicoes_vibracao 
+            SET status_analise = 'Analisado' 
+            WHERE equipamento_tag = %s AND status_analise = 'Pendente';
+        """, (falha.equipamento_tag,))
         
         conn.commit()
         return {"status": "success", "id": falha.id}
@@ -246,7 +256,7 @@ def save_falha(falha: RegistroFalha):
             except Exception: pass
 
 
-# --- ENDPOINT UPLOAD SKF (LÓGICA CICLO FIXO 28D) ---
+# --- ENDPOINT UPLOAD SKF (LÓGICA CICLO FIXO 28D + STATUS AUTOMÁTICO N/A / PENDENTE) ---
 @app.post("/upload-html")
 @app.post("/api/upload-html")
 async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None)):
@@ -302,6 +312,9 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                 if pd.notna(vp) and vp > 200.0 and (status_al == "---" or not status_al):
                     status_al = "Alert: High Deviation (>200%)"
 
+                # LÓGICA DO STATUS DE ANÁLISE: N/A se não tem alarme, Pendente se tem alarme
+                status_analise_val = "N/A" if (status_al == "---" or not status_al) else "Pendente"
+
                 data.append({
                     "equipamento_tag": current_machine, "unidade_fabril": current_unit,
                     "area_set": current_area, "ponto_medicao": current_point,
@@ -310,7 +323,8 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                     "valor_limite": float(vl) if pd.notna(vl) else None,
                     "variacao_perc": float(vp) if pd.notna(vp) else None,
                     "unidade": cols_clean[8] if len(cols_clean) > 8 else "",
-                    "status_alarme": status_al, "nome_rota": route_title
+                    "status_alarme": status_al, "nome_rota": route_title,
+                    "status_analise": status_analise_val
                 })
             except Exception:
                 continue
@@ -326,6 +340,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                 if not vm_validos.empty: linha["valor_medido"] = vm_validos.iloc[0]
             alarmes = [str(s) for s in group["status_alarme"].unique() if s and str(s) != "---"]
             linha["status_alarme"] = "\n".join(alarmes) if alarmes else "---"
+            linha["status_analise"] = "Pendente" if alarmes else "N/A"
             return linha
 
         df = (df_raw.groupby(["equipamento_tag", "ponto_medicao", "data_hora"], as_index=False, group_keys=False)
@@ -338,18 +353,18 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
                 r['equipamento_tag'], r['unidade_fabril'], r['area_set'], r['ponto_medicao'], 
                 r['data_hora'].to_pydatetime() if pd.notna(r['data_hora']) else None,
                 r['valor_medido'], r['valor_limite'], r['variacao_perc'], 
-                r['unidade'], r['status_alarme'], r['nome_rota']
+                r['unidade'], r['status_alarme'], r['nome_rota'], r['status_analise']
             ))
 
         if recs:
             psycopg2.extras.execute_values(
                 cur,
                 """INSERT INTO tb_medicoes_vibracao 
-                (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
+                (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota, status_analise)
                 VALUES %s""", recs
             )
 
-        # MÁGICA DO CICLO FIXO AQUI
+        # MÁGICA DO CICLO FIXO 28D
         agora = datetime.now()
         cur.execute("SELECT next_execution FROM tb_schedule_rotas WHERE route_name = %s;", (rota_nome,))
         rota_atual = cur.fetchone()
@@ -366,7 +381,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
         """, (agora, nova_prox_data, rota_nome))
 
         conn.commit()
-        return {"status": "success", "message": f"{len(recs)} medições guardadas com sucesso!"}
+        return {"status": "success", "message": f"{len(recs)} medições guardadas com sucesso! Pontos normais classificados como N/A."}
 
     except Exception as e:
         if conn: conn.rollback()
