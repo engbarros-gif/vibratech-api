@@ -66,12 +66,37 @@ def get_rotas():
 @app.get("/api/medicoes")
 def get_medicoes():
     conn = get_db_connection()
-    if not conn: return []
+    if not conn: 
+        return []
+    
     try:
         cur = conn.cursor()
+        # Seleciona as medições, ordenando das mais recentes para as mais antigas
         cur.execute("SELECT * FROM tb_medicoes_vibracao ORDER BY data_hora DESC LIMIT 100;")
-        return cur.fetchall()
-    except Exception: return []
+        medicoes_cruas = cur.fetchall()
+        
+        medicoes_formatadas = []
+        for m in medicoes_cruas:
+            # Formata os dados para garantir que o frontend os recebe perfeitamente
+            medicoes_formatadas.append({
+                "id": m.get("id", len(medicoes_formatadas) + 1),
+                "equipamento_tag": m.get("equipamento_tag", ""),
+                "ponto_medicao": m.get("ponto_medicao", ""),
+                "data_hora": m.get("data_hora").isoformat() if m.get("data_hora") else "",
+                "valor_medido": m.get("valor_medido"),
+                "valor_limite": m.get("valor_limite"),
+                "variacao_perc": m.get("variacao_perc"),
+                "unidade": m.get("unidade", ""),
+                "status_alarme": m.get("status_alarme", "---"),
+                "nome_rota": m.get("nome_rota", ""),
+                "status": "Unacknowledged" # Campo exigido pelo frontend
+            })
+            
+        return medicoes_formatadas
+
+    except Exception as e: 
+        print(f"Erro ao buscar medições: {e}")
+        return []
     finally:
         cur.close()
         conn.close()
@@ -174,41 +199,6 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
               .apply(agrupar_alarmes)
               .reset_index(drop=True))
 
-        # 4. Inserção no Neon (Substitui to_sql por executemany)
+        # 4. Inserção no Neon
         records_to_insert = []
-        for _, row in df.iterrows():
-            if pd.isna(row['data_hora']): continue  # Ignora linhas sem data válida
-            records_to_insert.append((
-                row['equipamento_tag'], row['unidade_fabril'], row['area_set'], row['ponto_medicao'], 
-                row['data_hora'].to_pydatetime() if pd.notna(row['data_hora']) else None,
-                row['valor_medido'], row['valor_limite'], row['variacao_perc'], 
-                row['unidade'], row['status_alarme'], row['nome_rota']
-            ))
-
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO tb_medicoes_vibracao 
-            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
-            VALUES %s
-            """,
-            records_to_insert
-        )
-
-        # Atualiza a rota
-        agora = datetime.now()
-        cur.execute("""
-            UPDATE tb_schedule_rotas 
-            SET status = 'Completed', last_execution = %s, next_execution = %s
-            WHERE route_name = %s;
-        """, (agora, agora + timedelta(days=28), rota_nome))
-
-        conn.commit()
-        return {"status": "success", "filename": file.filename, "message": f"{len(records_to_insert)} medições gravadas com sucesso no Neon!"}
-
-    except Exception as e:
-        conn.rollback()
-        return {"status": "error", "message": f"Erro no processamento do HTML: {str(e)}"}
-    finally:
-        cur.close()
-        conn.close()
+        for _, row in df.
