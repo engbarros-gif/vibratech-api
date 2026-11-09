@@ -128,7 +128,7 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
         cur = conn.cursor()
         contents = await file.read()
         html_content = contents.decode("utf-8", errors="ignore")
-        soup = BeautifulSoup(html_content, "lxml")
+        soup = BeautifulSoup(html_content, "html.parser")
         
         table = soup.find("table")
         if not table:
