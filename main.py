@@ -243,3 +243,4 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
     finally:
         cur.close()
         conn.close()
+# Atualização limpa
