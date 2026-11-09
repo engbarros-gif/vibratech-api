@@ -201,4 +201,39 @@ async def upload_html(file: UploadFile = File(...), rota_nome: str = Form(None))
 
         # 4. Inserção no Neon
         records_to_insert = []
-        for _, row in df.
+        for _, row in df.iterrows():
+            if pd.isna(row['data_hora']): continue
+            records_to_insert.append((
+                row['equipamento_tag'], row['unidade_fabril'], row['area_set'], row['ponto_medicao'], 
+                row['data_hora'].to_pydatetime() if pd.notna(row['data_hora']) else None,
+                row['valor_medido'], row['valor_limite'], row['variacao_perc'], 
+                row['unidade'], row['status_alarme'], row['nome_rota']
+            ))
+
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO tb_medicoes_vibracao 
+            (equipamento_tag, unidade_fabril, area_set, ponto_medicao, data_hora, valor_medido, valor_limite, variacao_perc, unidade, status_alarme, nome_rota)
+            VALUES %s
+            """,
+            records_to_insert
+        )
+
+        # Atualiza a rota
+        agora = datetime.now()
+        cur.execute("""
+            UPDATE tb_schedule_rotas 
+            SET status = 'Completed', last_execution = %s, next_execution = %s
+            WHERE route_name = %s;
+        """, (agora, agora + timedelta(days=28), rota_nome))
+
+        conn.commit()
+        return {"status": "success", "filename": file.filename, "message": f"{len(records_to_insert)} medições gravadas com sucesso no Neon!"}
+
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "message": f"Erro no processamento do HTML: {str(e)}"}
+    finally:
+        cur.close()
+        conn.close()
